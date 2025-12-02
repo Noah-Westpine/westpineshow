@@ -109,8 +109,10 @@
 
         // Mock data structure for the episodes (Updated with tags)
         const episodeData = [
-            { id: 2, title: "The Week of December 1-5", season: 1, episode: 2, duration: "Unknown", summary: "The Week we come back from Thanksgiving Break", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/f472b6/0c0c0c?text=S1+E2+December 1-5", releaseDate: "Dec 08, 2025", tags: ["Winter", "December"] },
-            { id: 1, title: "The Pilot", season: 1, episode: 1, duration: "1 Hour", summary: "Westpine!'s Pilot Episode", youtubeId: "ikezqOy4yEQ", thumbnail: "https://placehold.co/400x225/a5b4fc/0c0c0c?text=S1+E1+Pilot", releaseDate: "Dec 02, 2025", tags: ["Introduction", "Student Profiles"] },
+            { id: 4, title: "Cafeteria Secrets", season: 2, episode: 2, duration: "8 min", summary: "Exploring the legendary 'Mystery Meat' and the hidden talents of the cafeteria staff.", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/10b981/0c0c0c?text=S2+E2+Cafeteria", director: "Jane Smith", writer: "Team Westpine", releaseDate: "Nov 28, 2024", tags: ["Food", "Staff", "Student Life"] },
+            { id: 3, title: "After-Hours Clubs", season: 2, episode: 1, duration: "12 min", summary: "A look at the robotics and debate clubs and the dedication of the students that run them.", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/06b6d4/0c0c0c?text=S2+E1+Clubs", director: "John Doe", writer: "Alex Chen", releaseDate: "Nov 21, 2024", tags: ["Academics", "Student Life", "Robotics"] },
+            { id: 2, title: "The Week of December 1-5", season: 1, episode: 2, duration: "9 min", summary: "A deep dive into the school's forgotten history, focusing on a mysterious stairwell rumored to lead to a hidden broadcast room.", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/f472b6/0c0c0c?text=S1+E2+Stairwell", director: "Jane Smith", writer: "Team Westpine", releaseDate: "Nov 14, 2024", tags: ["History", "Mystery", "Urban Legends"] },
+            { id: 1, title: "The Pilot", season: 1, episode: 1, duration: "1 Hour", summary: "An introductory look at the quirks and secrets of our school, profiling some of its most unique characters and urban legends.", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/a5b4fc/0c0c0c?text=S1+E1+Pilot", director: "John Doe", writer: "Alex Chen", releaseDate: "Nov 07, 2024", tags: ["Introduction", "Student Profiles"] },
         ];
 
         let mostRecentEpisode = episodeData[0];
@@ -710,9 +712,13 @@
         function openVideoModal(youtubeId, title) {
             const modal = document.getElementById('video-player-modal');
             const videoContainer = document.getElementById('video-iframe-container');
+            // FIX: Ensure 'modal-title' element exists before accessing its textContent
             const modalTitle = document.getElementById('modal-title');
             
-            modalTitle.textContent = title;
+            if (modalTitle) { // Safety check
+                modalTitle.textContent = title;
+            }
+            
             videoContainer.innerHTML = '<div id="youtube-player"></div>';
             modal.classList.remove('hidden');
 
@@ -866,6 +872,10 @@
     <!-- Video Modal / Lightbox (Updated with custom controls) -->
     <div id="video-player-modal" class="hidden fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center p-4">
         <div class="relative w-full max-w-5xl aspect-video" onclick="event.stopPropagation()">
+            
+            <!-- Video Title (FIXED: Added modal-title element) -->
+            <h2 id="modal-title" class="absolute top-[-40px] left-0 text-xl font-bold text-white truncate max-w-full"></h2>
+
             <!-- YouTube Player API container -->
             <div id="video-iframe-container" class="w-full h-full rounded-xl overflow-hidden shadow-2xl">
                 <!-- Video iframe/player will be dynamically inserted here -->
@@ -875,7 +885,7 @@
             <div id="custom-controls" class="flex items-center justify-between text-white rounded-b-xl">
                 <div class="flex items-center space-x-3">
                     <button id="play-pause-btn" class="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition">
-                         <i id="play-pause-icon" data-lucide="play" class="w-6 h-6 fill-white"></i>
+                         <i id="play-pause-icon" data-lucide="play" class="w-6 h-6 mr-1 fill-white"></i>
                     </button>
                     <button id="close-player-btn" class="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition" title="Close Player">
                          <i data-lucide="x" class="w-5 h-5"></i>
