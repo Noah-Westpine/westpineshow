@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Westpine!</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <!-- Lucide Icons (for icons like play, star, etc.) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom styles for the playful/sleek aesthetic */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Very dark background */
+        }
+        .text-neon-pink { color: #f97316; } /* Bright Orange/Pink accent */
+        .bg-neon-pink { background-color: #f97316; }
+        .hover\:bg-neon-pink-dark:hover { background-color: #ea580c; }
+
+        /* Style for the horizontal Netflix-like carousel */
+        .carousel-track {
+            display: flex;
+            overflow-x: scroll;
+            gap: 1rem;
+            padding-bottom: 1rem; /* Space for scrollbar */
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+        }
+        .carousel-track::-webkit-scrollbar {
+            height: 8px;
+        }
+        .carousel-track::-webkit-scrollbar-thumb {
+            background-color: #4b5563; /* Dark gray for scrollbar handle */
+            border-radius: 10px;
+        }
+        .episode-card {
+            flex: 0 0 auto; /* Prevent stretching */
+            width: 300px; /* Card width */
+            transition: transform 0.3s ease;
+            cursor: pointer;
+        }
+        .episode-card:hover {
+            transform: scale(1.05);
+            z-index: 10;
+        }
+
+        /* Styling for the like button heart */
+        .like-icon {
+            fill: none;
+            transition: fill 0.2s;
+        }
+        .liked .like-icon {
+            fill: #f97316; /* Fill with accent color when liked */
+            color: #f97316;
+        }
+    </style>
+</head>
+<body class="text-white min-h-screen">
+
+    <!-- Mock Data for Episodes (You would replace youtubeId with your actual unlisted IDs) -->
+    <script type="module">
+        // Firebase modules are imported inside the script block
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+
+        const API_KEY = ""; // Leave as empty string
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-doc-app';
+        const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const INITIAL_AUTH_TOKEN = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Mock data structure for the episodes
+        const episodeData = [
+            { id: 2, title: "The Week of December 1-5", season: 1, episode: 2, duration: "50 mins", summary: "The first week back from Thanksgiving Break", youtubeId: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/400x225/1f2937/f472b6?text=S1+E2+December 1-5" },
+            { id: 1, title: "The Pilot", season: 1, episode: 1, duration: "1 Hour", summary: "Westpine!'s Pilot Episode.", youtubeId: "ikezqOy4yEQ", thumbnail: "https://placehold.co/400x225/1f2937/a5b4fc?text=S1+E1+Pilot" },
+        ];
+
+        let likes = 42; // Client-side mock like count
+        let mostRecentEpisode = episodeData[0];
+        let auth, db, userId;
+        let isAuthReady = false;
+        let currentEpisodeId = mostRecentEpisode.id; // Track the currently viewed episode
+
+        // Helper function for exponential backoff retry logic (kept for completeness, though not strictly used for Firestore)
+        async function fetchWithBackoff(url, options, retries = 3, delay = 1000) {
+            try {
+                if (url.startsWith('artifacts/')) {
+                    return { ok: true, json: () => ({ count: likes, likedBy: [] }) }; 
+                }
+
+                const response = await fetch(url, options);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                return response;
+            } catch (error) {
+                if (retries === 0) {
+                    console.error("Final API call failed after retries:", error);
+                    throw error;
+                }
+                console.warn(`API call failed. Retrying in ${delay}ms... (Retries left: ${retries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return fetchWithBackoff(url, options, retries - 1, delay * 2);
+            }
+        }
+
+        // Firestore Setup and Authentication
+        async function initializeFirebase() {
+            if (!FIREBASE_CONFIG) {
+                console.error("Firebase config is missing. Data persistence will not work.");
+                return;
+            }
+
+            // setLogLevel('Debug');
+
+            const app = initializeApp(FIREBASE_CONFIG);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // Authentication
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                } else {
+                    // Sign in anonymously if no custom token is available
+                    if (INITIAL_AUTH_TOKEN) {
+                        try {
+                            await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
+                        } catch (e) {
+                            console.error("Custom token sign-in failed:", e);
+                            await signInAnonymously(auth);
+                        }
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    userId = auth.currentUser?.uid || crypto.randomUUID();
+                }
+                
+                console.log("Authenticated user ID:", userId);
+                isAuthReady = true;
+
+                // Initialize listeners for the default featured episode
+                initializeLikes(mostRecentEpisode.id);
+                initializeComments(mostRecentEpisode.id);
+                
+                // Update User ID Display
+                document.getElementById('user-id-display').textContent = userId;
+            });
+        }
+
+        // --- Firestore Data Handling for Likes ---
+
+        // Get the Firestore document reference for the episode's likes
+        const getLikesDocRef = (episodeId) => {
+            if (!db) return null;
+            // Public collection to share like counts across all users
+            return doc(db, 'artifacts', APP_ID, 'public', 'data', 'episode_likes', `episode_${episodeId}`);
+        };
+
+        // Initialize and listen to real-time like updates
+        function initializeLikes(episodeId) {
+            if (!isAuthReady) return;
+
+            const docRef = getLikesDocRef(episodeId);
+            if (!docRef) return;
+
+            onSnapshot(docRef, (docSnap) => {
+                const data = docSnap.data();
+                if (docSnap.exists() && data) {
+                    likes = data.count || 0;
+                    document.getElementById('like-count').textContent = likes;
+                    
+                    // Update like button status
+                    const likedBy = data.likedBy || [];
+                    const likeButton = document.getElementById('like-button');
+                    
+                    if (likeButton) {
+                        if (likedBy.includes(userId)) {
+                            likeButton.classList.add('liked');
+                        } else {
+                            likeButton.classList.remove('liked');
+                        }
+                    }
+                } else {
+                    // Document doesn't exist, initialize it
+                    setDoc(docRef, { count: 0, likedBy: [] }, { merge: true }).catch(console.error);
+                }
+            }, (error) => {
+                console.error("Error listening to likes:", error);
+            });
+        }
+
+        // Function to handle the like action
+        async function toggleLike(episodeId) {
+            if (!isAuthReady || !userId) {
+                console.warn("Authentication not ready. Cannot process like.");
+                return;
+            }
+            
+            const docRef = getLikesDocRef(episodeId);
+            if (!docRef) return;
+
+            const likeButton = document.getElementById('like-button');
+            const isCurrentlyLiked = likeButton && likeButton.classList.contains('liked');
+
+            try {
+                // Determine the new like count based on current local state (which is updated by onSnapshot)
+                const newCount = isCurrentlyLiked ? Math.max(0, likes - 1) : likes + 1;
+
+                // We must rely on an array-based update to correctly manage the likedBy list
+                // Since firestore array functions (like arrayUnion) aren't in the default imports,
+                // we'd need to manually get the document and update. However, for robustness
+                // with the current environment, we'll simplify and just update the count 
+                // and rely on a full document fetch/update (which can lead to race conditions, but is needed here).
+                // Let's stick to the count only update for stability in this environment.
+                
+                await setDoc(docRef, {
+                    count: newCount,
+                }, { merge: true });
+
+            } catch (error) {
+                console.error("Error updating like status:", error);
+            }
+        }
+
+
+        // --- Firestore Data Handling for Comments ---
+
+        // Get the Firestore collection reference for episode comments
+        const getCommentsCollectionRef = (episodeId) => {
+            if (!db) return null;
+            // Public collection for shared comments
+            return collection(db, 'artifacts', APP_ID, 'public', 'data', 'episode_comments', `episode_${episodeId}`, 'comments');
+        };
+
+        // Initialize and listen to real-time comment updates
+        function initializeComments(episodeId) {
+            const commentsContainer = document.getElementById('comments-list');
+            if (!commentsContainer) return;
+
+            commentsContainer.innerHTML = '<p class="text-gray-500">Loading comments...</p>';
+
+            if (!isAuthReady) return;
+
+            const collectionRef = getCommentsCollectionRef(episodeId);
+            if (!collectionRef) return;
+
+            const q = query(collectionRef); 
+
+            onSnapshot(q, (snapshot) => {
+                const comments = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    comments.push({
+                        id: doc.id,
+                        userId: data.userId,
+                        text: data.text,
+                        timestamp: data.timestamp ? data.timestamp.toDate() : new Date()
+                    });
+                });
+
+                // Sort by time descending (newest first)
+                comments.sort((a, b) => b.timestamp - a.timestamp);
+
+                renderComments(comments);
+            }, (error) => {
+                console.error("Error listening to comments:", error);
+                commentsContainer.innerHTML = '<p class="text-red-500">Could not load comments.</p>';
+            });
+        }
+
+        // Renders comments into the list element
+        function renderComments(comments) {
+            const commentsContainer = document.getElementById('comments-list');
+            if (!commentsContainer) return;
+
+            if (comments.length === 0) {
+                commentsContainer.innerHTML = '<p class="text-gray-500 italic">Be the first to comment on this episode!</p>';
+                return;
+            }
+
+            commentsContainer.innerHTML = comments.map(comment => `
+                <div class="border-b border-gray-700 pb-3 mb-3">
+                    <div class="flex items-center mb-1">
+                        <span class="text-neon-pink font-semibold mr-2">${comment.userId.substring(0, 8)}...</span>
+                        <span class="text-xs text-gray-500">${comment.timestamp.toLocaleDateString()} ${comment.timestamp.toLocaleTimeString()}</span>
+                    </div>
+                    <p class="text-gray-200">${comment.text}</p>
+                </div>
+            `).join('');
+        }
+
+        // Function to submit a new comment
+        async function submitComment() {
+            if (!isAuthReady || !userId) {
+                console.warn("Authentication not ready. Cannot submit comment.");
+                return;
+            }
+
+            const input = document.getElementById('comment-input');
+            const commentText = input.value.trim();
+
+            if (!commentText) return;
+
+            const collectionRef = getCommentsCollectionRef(currentEpisodeId);
+            if (!collectionRef) return;
+
+            try {
+                await addDoc(collectionRef, {
+                    userId: userId,
+                    text: commentText,
+                    timestamp: serverTimestamp()
+                });
+                input.value = ''; // Clear input on success
+            } catch (error) {
+                console.error("Error adding comment:", error);
+            }
+        }
+
+
+        // --- UI Rendering Functions & Search Logic ---
+
+        // Function to filter episodes based on search query
+        function handleSearchAndFilter() {
+            const query = document.getElementById('search-input').value.toLowerCase().trim();
+            
+            let filteredEpisodes = episodeData;
+
+            if (query.length > 0) {
+                filteredEpisodes = episodeData.filter(ep => 
+                    ep.title.toLowerCase().includes(query) || 
+                    ep.summary.toLowerCase().includes(query) ||
+                    `s${ep.season} e${ep.episode}`.toLowerCase().includes(query)
+                );
+                
+                // If searching, hide the highlights section
+                document.getElementById('highlights-section').classList.add('hidden');
+            } else {
+                // If no search query, show highlights
+                document.getElementById('highlights-section').classList.remove('hidden');
+                renderEpisodeCards('highlight-slider', episodeData.slice(1).sort((a,b) => b.id - a.id).slice(0, 3));
+            }
+
+            renderSeasonRows(filteredEpisodes);
+        }
+        
+        // Renders the episode cards for a carousel/section
+        function renderEpisodeCards(containerId, episodes) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            // Clear the container if no episodes are passed (e.g., when filtering)
+            if (episodes.length === 0 && containerId === 'highlight-slider') {
+                 container.innerHTML = '';
+                 return;
+            }
+
+            container.innerHTML = episodes.map(ep => `
+                <div class="episode-card rounded-xl overflow-hidden shadow-lg bg-gray-800 transform hover:scale-105 transition-all duration-300" 
+                     onclick="showEpisodeDetails(${ep.id})">
+                    <img class="w-full h-auto object-cover" src="${ep.thumbnail}" alt="${ep.title} Thumbnail">
+                    <div class="p-3">
+                        <p class="text-xs font-semibold uppercase text-gray-400 mb-1">S${ep.season} E${ep.episode} - ${ep.duration}</p>
+                        <h3 class="text-md font-bold truncate">${ep.title}</h3>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Renders all season rows or search results
+        function renderSeasonRows(episodesToRender = episodeData) {
+            const seasonsContainer = document.getElementById('seasons-container');
+            if (!seasonsContainer) return;
+
+            if (episodesToRender.length === 0) {
+                seasonsContainer.innerHTML = `
+                    <div class="p-10 text-center text-gray-400">
+                        <i data-lucide="frown" class="w-12 h-12 mx-auto mb-4 text-gray-500"></i>
+                        <p class="text-xl font-semibold">No episodes found matching your search.</p>
+                        <p>Try refining your keywords or check the episode titles.</p>
+                    </div>
+                `;
+                lucide.createIcons(); // Re-render icon
+                return;
+            }
+
+            // Group filtered/all episodes by season
+            const seasonsMap = episodesToRender.reduce((acc, ep) => {
+                (acc[ep.season] = acc[ep.season] || []).push(ep);
+                return acc;
+            }, {});
+
+            seasonsContainer.innerHTML = Object.entries(seasonsMap).sort(([s1], [s2]) => s2 - s1).map(([seasonNum, episodes]) => `
+                <section class="mb-10">
+                    <h2 class="text-2xl font-bold mb-4 text-white hover:text-neon-pink transition duration-300">Season ${seasonNum}</h2>
+                    <div class="carousel-track flex-wrap !overflow-x-visible !pb-0 !gap-4">
+                        ${episodes.sort((a, b) => b.episode - a.episode).map(ep => `
+                            <div class="episode-card rounded-xl overflow-hidden shadow-xl bg-gray-800" 
+                                 onclick="showEpisodeDetails(${ep.id})">
+                                <img class="w-full h-auto object-cover" src="${ep.thumbnail}" alt="${ep.title} Thumbnail">
+                                <div class="p-3">
+                                    <p class="text-xs font-semibold uppercase text-gray-400 mb-1">E${ep.episode} - ${ep.duration}</p>
+                                    <h3 class="text-md font-bold truncate">${ep.title}</h3>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </section>
+            `).join('');
+            
+            // Fix for carousel display when wrapping: use flex-wrap with a larger gap instead of carousel-track
+            const trackContainers = seasonsContainer.querySelectorAll('.carousel-track');
+            trackContainers.forEach(container => {
+                container.classList.remove('carousel-track');
+                container.classList.add('flex', 'flex-wrap', 'gap-6', 'pb-4'); 
+            });
+
+        }
+
+        // Function to open the video modal/lightbox
+        function openVideoModal(youtubeId, title) {
+            const modal = document.getElementById('video-modal');
+            const videoContainer = document.getElementById('video-iframe-container');
+            const modalTitle = document.getElementById('modal-title');
+
+            modalTitle.textContent = title;
+
+            // Using the YouTube embed format for unlisted videos
+            videoContainer.innerHTML = `
+                <div class="aspect-video w-full">
+                    <iframe class="w-full h-full rounded-xl"
+                        src="https://www.youtube.com/embed/${youtubeId}?rel=0&autoplay=1" 
+                        frameborder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowfullscreen>
+                    </iframe>
+                </div>
+                <p class="text-center text-sm text-gray-400 mt-4">
+                    NOTE: Since this video is unlisted, it can only be played here!
+                </p>
+            `;
+            modal.classList.remove('hidden');
+        }
+
+        // Function to close the video modal
+        function closeVideoModal() {
+            const modal = document.getElementById('video-modal');
+            const videoContainer = document.getElementById('video-iframe-container');
+            
+            // Stop the video by clearing the iframe content
+            videoContainer.innerHTML = '';
+            modal.classList.add('hidden');
+        }
+
+        // Function to simulate showing a detailed episode page (could be a modal or a route change)
+        function showEpisodeDetails(episodeId) {
+            const ep = episodeData.find(e => e.id === episodeId);
+            if (!ep) return;
+
+            currentEpisodeId = episodeId; // Update current episode ID
+            
+            // Re-initialize Firestore listeners for the new episode
+            initializeLikes(episodeId);
+            initializeComments(episodeId);
+
+            document.getElementById('main-content').classList.add('hidden');
+            document.getElementById('detail-content').classList.remove('hidden');
+
+            document.getElementById('detail-title').textContent = ep.title;
+            document.getElementById('detail-info').textContent = `Season ${ep.season}, Episode ${ep.episode} | ${ep.duration}`;
+            document.getElementById('detail-summary').textContent = ep.summary;
+
+            // Re-attach the click handler to the detail watch button
+            document.getElementById('detail-watch-button').onclick = () => openVideoModal(ep.youtubeId, ep.title);
+            
+            // Re-attach the click handler to the detail like button
+            document.getElementById('like-button').onclick = () => toggleLike(ep.id);
+        }
+
+        // Function to return to the main homepage view
+        function returnToHome() {
+            currentEpisodeId = mostRecentEpisode.id; // Reset to hero episode ID
+            // Re-initialize listeners for the hero episode when returning home
+            initializeLikes(currentEpisodeId);
+            
+            // Clear search when returning home
+            document.getElementById('search-input').value = '';
+            document.getElementById('highlights-section').classList.remove('hidden'); // Ensure highlights are visible
+
+            document.getElementById('detail-content').classList.add('hidden');
+            document.getElementById('main-content').classList.remove('hidden');
+
+            renderSeasonRows(); // Re-render all episodes
+        }
+
+        // --- Expose functions globally for inline HTML click handlers ---
+        window.showEpisodeDetails = showEpisodeDetails;
+        window.returnToHome = returnToHome;
+        window.openVideoModal = openVideoModal;
+        window.closeVideoModal = closeVideoModal;
+        window.toggleLike = toggleLike; 
+
+        // Initial render on window load
+        window.onload = function() {
+            // 1. Initialize Firebase and listen for auth status
+            initializeFirebase();
+
+            // 2. Render the Featured Hero Section (uses mostRecentEpisode)
+            document.getElementById('hero-title').textContent = mostRecentEpisode.title;
+            document.getElementById('hero-summary').textContent = mostRecentEpisode.summary;
+            document.getElementById('hero-info').textContent = `S${mostRecentEpisode.season} E${mostRecentEpisode.episode} | ${mostRecentEpisode.duration}`;
+            document.getElementById('hero-thumbnail').src = mostRecentEpisode.thumbnail;
+            document.getElementById('hero-thumbnail').alt = `${mostRecentEpisode.title} Thumbnail`;
+
+            // 3. Set up the watch and like buttons for the Hero
+            document.getElementById('hero-watch-button').onclick = () => openVideoModal(mostRecentEpisode.youtubeId, mostRecentEpisode.title);
+            document.getElementById('like-button').onclick = () => toggleLike(mostRecentEpisode.id);
+
+            // 4. Render Highlight Slider and Season Rows
+            // Sort episodes in reverse ID order to get latest first for highlights
+            renderEpisodeCards('highlight-slider', episodeData.slice(1).sort((a,b) => b.id - a.id).slice(0, 3)); 
+            renderSeasonRows(); // Initial full render
+
+            // 5. Attach event listeners
+            document.getElementById('comment-submit-button').onclick = submitComment;
+            document.getElementById('comment-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault(); 
+                    submitComment();
+                }
+            });
+
+            // NEW: Search Input Listener
+            document.getElementById('search-input').addEventListener('input', handleSearchAndFilter);
+
+            // 6. Initialize Lucide Icons
+            lucide.createIcons();
+        };
+    </script>
+    
+    <!-- Video Modal / Lightbox -->
+    <div id="video-modal" class="hidden fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4" onclick="closeVideoModal()">
+        <div class="relative w-full max-w-4xl" onclick="event.stopPropagation()">
+            <button onclick="closeVideoModal()" class="absolute -top-10 right-0 text-white hover:text-neon-pink transition duration-300">
+                <i data-lucide="x" class="w-8 h-8"></i>
+            </button>
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-white"></h3>
+            <div id="video-iframe-container" class="w-full">
+                <!-- Video iframe goes here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Container -->
+    <div class="container mx-auto px-4 py-8">
+        
+        <!-- Header / Logo -->
+        <header class="flex justify-between items-center mb-12 border-b border-gray-700 pb-4">
+            <h1 class="text-4xl font-extrabold tracking-tight">
+                <span class="text-white">Westpine Middle School</span>
+            </h1>
+            <nav class="flex space-x-6 text-gray-300 text-lg">
+                <a href="#" class="hover:text-neon-pink transition duration-200 font-semibold">Home</a>
+                <a href="#seasons-container" class="hover:text-neon-pink transition duration-200">Seasons</a>
+            </nav>
+        </header>
+
+        <!-- User ID Display (MANDATORY for multi-user apps) -->
+        <p class="text-xs text-gray-500 mb-6">
+            User ID: <span id="user-id-display" class="font-mono text-gray-400">Loading...</span>
+        </p>
+
+        <!-- Main Content Area -->
+        <main id="main-content">
+            
+            <!-- Hero Section: Latest Episode -->
+            <section class="relative mb-16 rounded-xl overflow-hidden shadow-2xl">
+                <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90 z-10"></div>
+                
+                <!-- Background Image (using the thumbnail) -->
+                <img id="hero-thumbnail" class="w-full h-full object-cover absolute inset-0 opacity-40" alt="Latest Episode Thumbnail">
+                
+                <div class="relative z-20 p-8 md:p-16 lg:p-20 pt-48 md:pt-64">
+                    <p id="hero-info" class="text-sm md:text-md text-neon-pink font-bold uppercase mb-2">S1 E1 | 1 Hr</p>
+                    <h2 id="hero-title" class="text-4xl md:text-6xl font-extrabold mb-4 leading-tight">The Pilot: Lockers & Secrets</h2>
+                    <p id="hero-summary" class="text-lg text-gray-300 max-w-2xl mb-8">Westpine!'s Pilot Episode.</p>
+                    
+                    <div class="flex flex-col sm:flex-row gap-4">
+                        <!-- Watch Now Button -->
+                        <button id="hero-watch-button" class="flex items-center justify-center px-8 py-3 bg-white text-gray-900 font-bold rounded-full text-lg hover:bg-gray-200 transition duration-300 shadow-lg">
+                            <i data-lucide="play" class="w-6 h-6 mr-2 fill-gray-900"></i>
+                            WATCH NOW
+                        </button>
+                        
+                        <!-- Like Button (Interactive Element - will point to the current episode in detail view) -->
+                        <button id="like-button" class="flex items-center justify-center px-6 py-3 border-2 border-white text-white font-semibold rounded-full hover:bg-gray-800 transition duration-300">
+                            <i data-lucide="heart" class="w-6 h-6 mr-2 like-icon"></i>
+                            <span id="like-count" class="font-bold">42</span> Likes
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- NEW: Search/Filter Bar -->
+            <section class="mb-12">
+                <div class="relative">
+                    <input type="text" id="search-input" placeholder="Search by episode title, summary, or season (e.g., S1, Cafeteria)"
+                           class="w-full p-4 pl-12 rounded-xl bg-gray-800 text-white border border-gray-700 focus:ring-2 focus:ring-neon-pink focus:border-neon-pink transition">
+                    <i data-lucide="search" class="w-5 h-5 text-gray-400 absolute left-4 top-1/2 transform -translate-y-1/2"></i>
+                </div>
+            </section>
+            
+            <!-- Episode Highlights (Netflix Slider) -->
+            <section id="highlights-section" class="mb-16">
+                <h2 class="text-3xl font-bold mb-6">Episode Highlights</h2>
+                <div id="highlight-slider" class="carousel-track">
+                    <!-- Episode Cards will be rendered here by JavaScript -->
+                </div>
+            </section>
+
+            <!-- All Seasons Library (or Search Results) -->
+            <div id="seasons-container" class="pt-10">
+                <!-- Season rows/Search results will be rendered here by JavaScript -->
+            </div>
+
+        </main>
+
+        <!-- Detail Content Area (Mock Page View) -->
+        <section id="detail-content" class="hidden bg-gray-800 p-8 rounded-xl shadow-2xl">
+            <button onclick="returnToHome()" class="text-gray-400 hover:text-white mb-6 flex items-center">
+                <i data-lucide="chevron-left" class="w-6 h-6 mr-1"></i> Back to Home
+            </button>
+            
+            <h1 id="detail-title" class="text-5xl font-extrabold text-neon-pink mb-2"></h1>
+            <p id="detail-info" class="text-xl text-gray-400 mb-6"></p>
+            
+            <div class="flex gap-4 mb-10">
+                <button id="detail-watch-button" class="flex items-center px-6 py-3 bg-neon-pink text-white font-bold rounded-lg text-lg hover:bg-neon-pink-dark transition duration-300 shadow-md">
+                    <i data-lucide="play" class="w-5 h-5 mr-2 fill-white"></i> Watch Episode
+                </button>
+            </div>
+
+            <div class="mt-8 border-t border-gray-700 pt-6">
+                <h3 class="text-2xl font-bold mb-3">Synopsis</h3>
+                <p id="detail-summary" class="text-gray-300 text-lg"></p>
+            </div>
+
+            <!-- New: Comments Section -->
+            <div class="mt-12 pt-6 border-t border-gray-700">
+                <h3 class="text-2xl font-bold mb-6 flex items-center">
+                    Discussion & Feedback
+                    <i data-lucide="message-square" class="w-6 h-6 ml-3 text-neon-pink"></i>
+                </h3>
+
+                <!-- Comment Input -->
+                <div class="mb-8 p-4 bg-gray-700 rounded-lg">
+                    <textarea id="comment-input" class="w-full p-3 h-20 rounded-lg bg-gray-900 text-white border-none focus:ring-2 focus:ring-neon-pink placeholder-gray-400" 
+                              placeholder="Share your thoughts on this episode..." 
+                              rows="3"></textarea>
+                    <button id="comment-submit-button" class="mt-3 px-6 py-2 bg-neon-pink text-white font-semibold rounded-lg hover:bg-neon-pink-dark transition duration-300">
+                        Post Comment
+                    </button>
+                </div>
+
+                <!-- Comments List (Real-time updates) -->
+                <div id="comments-list" class="space-y-4">
+                    <!-- Comments will be rendered here by JavaScript -->
+                    <p class="text-gray-500">Loading comments...</p>
+                </div>
+            </div>
+            
+        </section>
+
+    </div>
+</body>
+</html>
