@@ -1,666 +1,571 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, onSnapshot, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
-import { Home, ListPlus, ListMinus, Zap, User, Play, Clock, ChevronDown, List as ListIcon } from 'lucide-react';
-
-// --- Global Variables (Provided by Canvas Environment) ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// --- Mock Episode Data ---
-// ERROR FIX: YouTube Player Error 150 indicates that the video is not set to allow embedding.
-// We are replacing all mock ytIds with a known, publicly embeddable placeholder ID to fix the issue.
-const EMBEDDABLE_YT_ID = "2g811Eo7K8U"; // Placeholder for an embeddable video
-
-const MOCK_EPISODE_DATA = [
-    { id: 'ep_s03e05', season: 3, episode: 5, title: "The Senior Prank Disaster", description: "The crew attempts the biggest prank in school history, but Jane accidentally films the whole thing on live TV.", duration: "24 min", ytId: EMBEDDABLE_YT_ID, thumbnail: "https://placehold.co/800x450/A366FF/ffffff?text=S03+E05+NEW" },
-    { id: 'ep_s03e04', season: 3, episode: 4, title: "Cafeteria Chaos", description: "Joe tries to negotiate a better lunch menu with Principal Davies, leading to a surprisingly dramatic food fight.", duration: "22 min", ytId: EMBEDDABLE_YT_ID, thumbnail: "https://placehold.co/800x450/205A28/ffffff?text=S03+E04" },
-    { id: 'ep_s03e03', season: 3, episode: 3, title: "The Substitute Teacher", description: "A popular substitute teacher takes over the show for a day, forcing the hosts to become contestants in their own quiz show.", duration: "25 min", ytId: EMBEDDABLE_YT_ID, thumbnail: "https://placehold.co/800x450/970747/ffffff?text=S03+E03" },
-    { id: 'ep_s02e08', season: 2, episode: 8, title: "Talent Show Tryouts", description: "Highlights and bloopers from the disastrous school talent show tryouts.", duration: "20 min", ytId: EMBEDDABLE_YT_ID, thumbnail: "https://placehold.co/800x450/A8D5E3/000000?text=S02+E08+FINALE" },
-    { id: 'ep_s01e01', season: 1, episode: 1, title: "Pilot", description: "The hosts analyze the week's biggest, and most pointless, drama on campus.", duration: "23 min", ytId: EMBEDDABLE_YT_ID, thumbnail: "https://placehold.co/800x450/EF036C/ffffff?text=S02+E07" },
-];
-
-const MOST_RECENT_EPISODE = MOCK_EPISODE_DATA[0];
-
-// --- Firebase Hooks ---
-
-/**
- * Custom hook to initialize Firebase and manage authentication state.
- */
-const useFirebase = () => {
-    const [db, setDb] = useState(null);
-    const [auth, setAuth] = useState(null);
-    const [userId, setUserId] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
-
-    useEffect(() => {
-        if (!firebaseConfig) {
-            console.error("Firebase config is missing.");
-            setIsAuthReady(true);
-            return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Westpine! - School Documentary Series</title>
+    <!-- Load Tailwind CSS via CDN for a modern, sleek look -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-red: #E50914; /* Netflix Red */
+            --dark-bg: #141414; /* Deep Black */
+            --light-text: #E5E5E5;
         }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--dark-bg);
+            color: var(--light-text);
+            min-height: 100vh;
+        }
+        .text-westpine {
+            color: var(--primary-red);
+        }
+        .bg-westpine-dark {
+            background-color: #222222;
+        }
+        .btn-primary {
+            background-color: var(--primary-red);
+            transition: background-color 0.2s;
+        }
+        .btn-primary:hover {
+            background-color: #F51C28;
+        }
+        /* Custom scrollbar style for carousels */
+        .carousel::-webkit-scrollbar {
+            height: 8px;
+        }
+        .carousel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="antialiased">
 
-        try {
-            const app = initializeApp(firebaseConfig);
-            const firestore = getFirestore(app);
-            const firebaseAuth = getAuth(app);
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, where, arrayUnion, arrayRemove, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'westpine-default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // initialAuthToken is available but signInAnonymously is preferred here for simplicity/testing
+
+        let db, auth, userId = null;
+        let EPISODE_MAP = {}; // Global map of episodes for quick lookups
+        let LATEST_EPISODE_ID = null; // Store the ID of the current hero episode
+
+        // Function to replace alert() with a custom modal
+        const showCustomModal = (title, message, type = 'Info') => {
+            const modal = document.getElementById('custom-alert-modal');
+            if (!modal) return;
             
-            setDb(firestore);
-            setAuth(firebaseAuth);
+            document.getElementById('custom-alert-title').textContent = title;
+            document.getElementById('custom-alert-message').textContent = message;
+            
+            // Set color based on type
+            const header = document.getElementById('custom-alert-header');
+            header.className = `p-4 rounded-t-xl text-white ${type === 'Error' ? 'bg-red-700' : 'bg-westpine'}`;
 
-            // 1. Authenticate with custom token or anonymously
-            const authenticate = async () => {
-                try {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(firebaseAuth, initialAuthToken);
+            modal.classList.remove('hidden');
+        };
+
+
+        if (firebaseConfig) {
+            // 1. Initialize Firebase
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // 2. Authentication and Initialization Logic
+            const authReadyPromise = new Promise(resolve => {
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
                     } else {
-                        await signInAnonymously(firebaseAuth);
+                        // Sign in anonymously
+                        await signInAnonymously(auth);
+                        userId = auth.currentUser.uid;
                     }
-                } catch(e) {
-                    console.error("Initial authentication failed:", e);
+                    console.log("Firebase Auth Ready. User ID:", userId);
+                    document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                    resolve(userId);
+                });
+            });
+            
+            // 3. Data Structure Paths
+            const EPISODE_COLLECTION_PATH = `artifacts/${appId}/public/data/showData/episodes`;
+            const getEpisodesCollectionRef = () => collection(db, EPISODE_COLLECTION_PATH);
+            // Public data for global ratings
+            const getEpisodeDataRef = (episodeId) => doc(db, `artifacts/${appId}/public/data/episodes`, episodeId);
+            // Private data for user's My List
+            const getFavoritesRef = () => doc(db, `artifacts/${appId}/users/${userId}/favorites`, 'myList');
+
+
+            // 4. Initial Episode Data (Used for seeding the database only)
+            const INITIAL_EPISODES = [
+                { id: 'ep102', season: 1, title: 'Week of December 1-5', description: 'The Week we come back from thanksgiving break.', youtubeId: 'FayqlM-4TGI', duration: '47 Mins', imageUrl: 'https://placehold.co/400x225/E50914/ffffff?text=S1+EP1+THUMB', date: '2025-12-06' },
+                { id: 'ep101', season: 1, title: 'Pilot', description: 'The Pilot of Westpine!', youtubeId: 'ikezqOy4yEQ', duration: '1 Hr', imageUrl: 'https://placehold.co/400x225/E50914/ffffff?text=S1+EP2+THUMB', date: '2025-12-02' }
+            ];
+
+            /** Checks if episode data exists in Firestore, if not, seeds it. */
+            const ensureEpisodeDataAndListen = async (currentUserId) => {
+                const q = query(getEpisodesCollectionRef());
+                const snapshot = await getDocs(q);
+                
+                if (snapshot.empty) {
+                    console.log("Seeding initial episode data into Firestore...");
+                    for (const ep of INITIAL_EPISODES) {
+                        await setDoc(doc(db, EPISODE_COLLECTION_PATH, ep.id), ep);
+                    }
+                    console.log("Seeding complete.");
+                }
+
+                // Set up a snapshot listener for real-time updates to the episode list
+                onSnapshot(q, (snapshot) => {
+                    const episodes = snapshot.docs.map(doc => doc.data());
+                    EPISODE_MAP = episodes.reduce((acc, ep) => { acc[ep.id] = ep; return acc; }, {});
+                    
+                    renderApp(episodes, currentUserId);
+                });
+            };
+
+            // 5. Rating and Liking Functions (Updated)
+            
+            /** Renders the star rating component based on current data. */
+            const renderStarRating = (episodeId, ratingData = {}) => {
+                const container = document.getElementById('star-rating-container');
+                if (!container || episodeId !== LATEST_EPISODE_ID) return; // Ensure only updating the hero rating
+
+                const { totalStars = 0, count = 0, userRating = 0 } = ratingData;
+                const averageRating = count > 0 ? (totalStars / count).toFixed(1) : 'N/A';
+                
+                let starsHTML = '';
+                for (let i = 1; i <= 5; i++) {
+                    const isFilled = i <= Math.round(averageRating);
+                    const isUserRating = i === userRating;
+                    
+                    // Prioritize user rating indicator, otherwise use average fill
+                    const fillColor = isUserRating ? 'text-red-500' : (isFilled ? 'text-yellow-400' : 'text-gray-600');
+                    const strokeColor = isUserRating ? 'text-red-500' : 'text-gray-400';
+                    const cursor = userId ? 'cursor-pointer' : 'cursor-default';
+                    const fillType = isFilled ? 'currentColor' : 'none';
+
+                    starsHTML += `
+                        <svg data-rating="${i}" class="w-8 h-8 ${cursor} ${fillColor}" 
+                            fill="${fillType}" stroke="${strokeColor}" 
+                            viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.637-.921 1.937 0l1.847 5.679a1.5 1.5 0 001.423 1.033h5.968c.969 0 1.371 1.24.588 1.81l-4.825 3.518a1.5 1.5 0 00-.54 1.691l1.847 5.679c.3.921-.755 1.688-1.54 1.118l-4.825-3.518a1.5 1.5 0 00-1.85 0l-4.825 3.518c-.784.57-1.84-.197-1.54-1.118l1.847-5.679a1.5 1.5 0 00-.54-1.691l-4.825-3.518c-.784-.57-.383-1.81.588-1.81h5.968a1.5 1.5 0 001.423-1.033l1.847-5.679z"></path>
+                        </svg>
+                    `;
+                }
+
+                container.innerHTML = `
+                    <div class="flex items-center space-x-2 text-xl font-bold">
+                        <span class="${averageRating !== 'N/A' ? 'text-yellow-400' : 'text-gray-400'}">${averageRating}</span>
+                        <span class="text-sm text-gray-400">(${count} votes)</span>
+                    </div>
+                    <div class="flex mt-2 space-x-1">${starsHTML}</div>
+                    ${userRating > 0 ? `<p class="mt-2 text-sm text-red-400">Your rating: ${userRating} stars</p>` : '<p class="mt-2 text-sm text-gray-400">Rate this episode!</p>'}
+                `;
+                
+                // Attach event listeners
+                if (userId) {
+                    container.querySelectorAll('svg').forEach(star => {
+                        star.onclick = (e) => handleRating(episodeId, parseInt(e.currentTarget.dataset.rating));
+                    });
                 }
             };
-            authenticate();
-
-            // 2. Set up listener for auth state changes
-            const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
-                const currentUserId = user?.uid || crypto.randomUUID();
-                setUserId(currentUserId);
-                setIsAuthReady(true);
-            });
-
-            return () => unsubscribe();
-        } catch (error) {
-            console.error("Firebase initialization failed:", error);
-            setIsAuthReady(true);
-        }
-    }, [firebaseConfig]);
-
-    return { db, auth, userId, isAuthReady };
-};
-
-/**
- * Custom hook for managing the user's private watchlist data in Firestore ("My List").
- */
-const useWatchList = (db, userId, isAuthReady) => {
-    const [watchList, setWatchList] = useState([]);
-
-    // Listener for real-time watchlist updates
-    useEffect(() => {
-        // IMPORTANT: Only proceed if db and userId are defined
-        if (!isAuthReady || !db || !userId) return;
-
-        // Private collection path: /artifacts/{appId}/users/{userId}/watchlist
-        const collectionPath = `/artifacts/${appId}/users/${userId}/watchlist`;
-        const docRefPath = doc(db, collectionPath, 'items');
-
-        const unsubscribe = onSnapshot(docRefPath, (docSnapshot) => {
-            if (docSnapshot.exists()) {
-                // The 'episodes' field contains the array of episode IDs
-                const data = docSnapshot.data();
-                setWatchList(data.episodes || []);
-            } else {
-                // Initialize the document if it doesn't exist
-                setWatchList([]);
-                setDoc(docRefPath, { episodes: [] }, { merge: true }).catch(err => console.error("Error initializing watchlist:", err));
-            }
-        }, (error) => {
-            console.error("Firestore WatchList snapshot error:", error);
-        });
-
-        return () => unsubscribe();
-    }, [db, userId, isAuthReady]);
-
-    // Function to toggle an episode in the list
-    const toggleWatchList = useCallback(async (episodeId, isAdded) => {
-        if (!db || !userId) {
-            console.warn("Database not ready or user ID missing.");
-            return;
-        }
-
-        const collectionPath = `/artifacts/${appId}/users/${userId}/watchlist`;
-        const docRefPath = doc(db, collectionPath, 'items');
-
-        try {
-            if (isAdded) {
-                // Remove the episode
-                await setDoc(docRefPath, { episodes: arrayRemove(episodeId) }, { merge: true });
-            } else {
-                // Add the episode
-                await setDoc(docRefPath, { episodes: arrayUnion(episodeId) }, { merge: true });
-            }
-        } catch (error) {
-            console.error("Error toggling watchlist item:", error);
-        }
-    }, [db, userId]);
-
-    return { watchList, toggleWatchList };
-};
-
-
-// --- Player Utilities ---
-
-/**
- * YouTube IFrame Player Script Loader.
- */
-const loadYoutubeScript = (onScriptLoad) => {
-    if (window.YT && window.YT.Player) {
-        onScriptLoad();
-        return;
-    }
-
-    if (!document.getElementById('youtube-iframe-api')) {
-        const tag = document.createElement('script');
-        tag.src = "https://www.youtube.com/iframe_api";
-        tag.id = 'youtube-iframe-api';
-        document.body.appendChild(tag);
-    }
-    
-    window.onYouTubeIframeAPIReady = onScriptLoad;
-};
-
-// --- Sub-Components ---
-
-/**
- * Represents a single episode card.
- */
-const EpisodeCard = React.memo(({ episode, onSelect, watchList, toggleWatchList }) => {
-    const isAdded = watchList.includes(episode.id);
-
-    return (
-        <div 
-            className="flex-shrink-0 w-40 md:w-64 cursor-pointer group transform hover:scale-[1.03] transition duration-300 rounded-xl"
-            onClick={() => onSelect(episode)}
-        >
-            <div className="relative overflow-hidden rounded-xl shadow-2xl bg-gray-800">
-                <img 
-                    src={episode.thumbnail}
-                    alt={episode.title}
-                    className="w-full h-auto object-cover transition duration-300 group-hover:opacity-75"
-                    onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/400x225/333333/ffffff?text=Video+Not+Found" }}
-                />
-                <button 
-                    className="absolute top-2 right-2 p-2 rounded-full bg-black/50 hover:bg-black/80 transition duration-150 text-white backdrop-blur-sm"
-                    onClick={(e) => {
-                        e.stopPropagation(); 
-                        toggleWatchList(episode.id, isAdded);
-                    }}
-                    title={isAdded ? "Remove from My List" : "Add to My List"}
-                >
-                    {isAdded ? <ListMinus size={18} className="text-red-400" /> : <ListPlus size={18} className="text-white" />}
-                </button>
-            </div>
-            <div className="mt-2 p-1">
-                <p className="text-white text-sm font-semibold truncate">{episode.title}</p>
-                <p className="text-gray-400 text-xs">{`S${episode.season} E${episode.episode} · ${episode.duration}`}</p>
-            </div>
-        </div>
-    );
-});
-
-/**
- * Custom Video Player Component (Wraps YouTube IFrame)
- */
-const CustomVideoPlayer = ({ episode, onMinimize }) => {
-    const playerRef = React.useRef(null);
-    const containerId = useMemo(() => `yt-player-${Date.now()}`, []);
-    
-    const [player, setPlayer] = useState(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [currentTime, setCurrentTime] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [progressInterval, setProgressInterval] = useState(null);
-    
-    // Function to initialize the player
-    const initPlayer = useCallback(() => {
-        if (!window.YT) {
-            console.error("YouTube API not loaded.");
-            return;
-        }
-
-        // Destroy existing player if present
-        if (playerRef.current && typeof playerRef.current.destroy === 'function') {
-             playerRef.current.destroy();
-        }
-
-        const newPlayer = new window.YT.Player(containerId, {
-            videoId: episode.ytId,
-            playerVars: {
-                controls: 0, 
-                autoplay: 1, 
-                modestbranding: 1,
-                rel: 0,
-            },
-            events: {
-                onReady: (e) => {
-                    setPlayer(e.target);
-                    setDuration(e.target.getDuration());
-                    e.target.playVideo();
-                },
-                onStateChange: (e) => {
-                    // State constants: 1=Playing, 2=Paused, 0=Ended
-                    setIsPlaying(e.data === window.YT.PlayerState.PLAYING);
-                    if (e.data === window.YT.PlayerState.PLAYING) {
-                        setDuration(e.target.getDuration());
-                    }
-                },
-                onError: (e) => console.error("YouTube Player Error:", e.data),
-            },
-        });
-        playerRef.current = newPlayer;
-    }, [episode.ytId, containerId]);
-
-    // 1. Load the YouTube script and initialize player on mount/episode change
-    useEffect(() => {
-        loadYoutubeScript(initPlayer);
-
-        return () => {
-            // Cleanup interval on unmount
-            clearInterval(progressInterval);
-            if (playerRef.current && typeof playerRef.current.destroy === 'function') {
-                 playerRef.current.destroy();
-            }
-        };
-    }, [episode.ytId, initPlayer]);
-
-    // 2. Start/Stop the time update interval based on playback state
-    useEffect(() => {
-        clearInterval(progressInterval); 
-
-        if (isPlaying && player) {
-            const interval = setInterval(() => {
-                setCurrentTime(player.getCurrentTime());
-            }, 500); 
-            setProgressInterval(interval);
-        }
-        
-        return () => clearInterval(progressInterval); 
-    }, [isPlaying, player]);
-
-
-    // Player Control Functions
-    const togglePlay = () => {
-        if (!player) return;
-        if (isPlaying) {
-            player.pauseVideo();
-        } else {
-            player.playVideo();
-        }
-        setIsPlaying(!isPlaying);
-    };
-
-    const handleSeek = (e) => {
-        if (!player || !duration) return;
-        const seekTime = (Number(e.target.value) / 100) * duration;
-        player.seekTo(seekTime, true);
-        setCurrentTime(seekTime);
-    };
-    
-    const formatTime = (seconds) => {
-        const totalSeconds = Math.round(seconds);
-        const minutes = Math.floor(totalSeconds / 60);
-        const remainingSeconds = totalSeconds % 60;
-        return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-    };
-
-    const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-
-    return (
-        <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black shadow-2xl">
-            <div id={containerId} className="w-full h-full">
-                {/* YouTube iframe will be injected here */}
-            </div>
-
-            {/* Custom Controls Overlay */}
-            <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${isPlaying ? 'opacity-0 hover:opacity-100' : 'opacity-100'}`}>
-                <button 
-                    className="p-4 rounded-full bg-white/30 hover:bg-white/50 transition duration-200 pointer-events-auto backdrop-blur-sm"
-                    onClick={togglePlay}
-                    title={isPlaying ? "Pause" : "Play"}
-                >
-                    <Play fill="white" size={48} className={`transition duration-300`} />
-                </button>
-            </div>
             
-            {/* Control Bar */}
-            <div className="absolute bottom-0 left-0 right-0 h-16 bg-black/90 transition-opacity duration-300 opacity-100 p-3 flex items-center space-x-4">
+            /** Handles a user submitting a star rating. */
+            const handleRating = async (episodeId, newRating) => {
+                if (!userId) {
+                    showCustomModal('Authentication Error', 'Please wait for the site to finish loading before rating.', 'Error');
+                    return;
+                }
+                const episodeRef = getEpisodeDataRef(episodeId);
+
+                // Fetch current user data for this episode (to check old rating)
+                const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/ratings`, episodeId);
+                let oldRating = 0;
+                try {
+                    const userDocSnap = await getDoc(userDocRef);
+                    oldRating = userDocSnap.exists() ? userDocSnap.data().rating : 0;
+                } catch(e) {
+                    console.error("Error fetching user rating:", e);
+                }
                 
-                {/* Play/Pause Button */}
-                <button 
-                    className="text-white p-2 hover:text-pink-400 transition-colors"
-                    onClick={togglePlay}
-                    title={isPlaying ? "Pause" : "Play"}
-                >
-                    {isPlaying ? <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> : <Play fill="currentColor" size={24} />}
-                </button>
+                if (oldRating === newRating) {
+                    newRating = 0; // User clicked the same rating, clearing it
+                }
+
+                await setDoc(userDocRef, { rating: newRating });
+
+                // Update public episode statistics (using a transaction would be safer, but this is simpler)
+                await setDoc(episodeRef, {}, { merge: true }); // Ensure document exists
                 
-                {/* Time Display */}
-                <span className="text-xs font-mono text-gray-300">{formatTime(currentTime)} / {formatTime(duration)}</span>
-
-                {/* Progress Bar (Custom styled range input) */}
-                <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={progressPercent}
-                    onChange={handleSeek}
-                    className="flex-grow h-2 rounded-full appearance-none cursor-pointer bg-gray-600 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#A366FF] [&::-webkit-slider-thumb]:appearance-none"
-                    style={{ background: `linear-gradient(to right, #A366FF 0%, #A366FF ${progressPercent}%, #374151 ${progressPercent}%, #374151 100%)` }}
-                />
+                const episodeSnap = await getDoc(episodeRef);
+                let { totalStars, count } = episodeSnap.exists() ? episodeSnap.data() : { totalStars: 0, count: 0 };
                 
-                {/* Minimize Button */}
-                <button 
-                    className="text-white p-2 hover:text-pink-400 transition-colors"
-                    onClick={onMinimize}
-                    title="Minimize Player"
-                >
-                    <ChevronDown size={20} />
-                </button>
-            </div>
-        </div>
-    );
-};
+                // Adjust totals
+                totalStars = (totalStars || 0) - (oldRating || 0) + newRating;
+                if (oldRating > 0 && newRating === 0) {
+                    count = (count || 1) - 1; // Decrement count if rating is cleared
+                } else if (oldRating === 0 && newRating > 0) {
+                    count = (count || 0) + 1; // Increment count for a new rating
+                }
 
+                // Protect against negative counts/totals
+                totalStars = Math.max(0, totalStars);
+                count = Math.max(0, count);
 
-// --- Main App Component ---
-function App() {
-    const { db, userId, isAuthReady } = useFirebase();
-    const { watchList, toggleWatchList } = useWatchList(db, userId, isAuthReady);
-
-    const [currentPage, setCurrentPage] = useState('home'); // 'home', 'player', 'mylist'
-    const [selectedEpisode, setSelectedEpisode] = useState(MOST_RECENT_EPISODE);
-    
-    // Sort all episodes by season and episode for display
-    const sortedEpisodes = useMemo(() => {
-        return MOCK_EPISODE_DATA.sort((a, b) => {
-            if (a.season !== b.season) return b.season - a.season;
-            return b.episode - a.episode;
-        });
-    }, []);
-
-    // Group episodes by season for the home screen rows
-    const episodesBySeason = useMemo(() => {
-        return sortedEpisodes.reduce((acc, episode) => {
-            const seasonKey = `Season ${episode.season}`;
-            if (!acc[seasonKey]) {
-                acc[seasonKey] = [];
-            }
-            acc[seasonKey].push(episode);
-            return acc;
-        }, {});
-    }, [sortedEpisodes]);
-
-    // Filter episodes for "My List" page
-    const myListView = useMemo(() => {
-        return sortedEpisodes.filter(e => watchList.includes(e.id));
-    }, [sortedEpisodes, watchList]);
-
-    // Handlers for navigation and player
-    const handleSelectEpisode = useCallback((episode) => {
-        setSelectedEpisode(episode);
-        setCurrentPage('player');
-    }, []);
-
-    const handlePlayerMinimize = useCallback(() => {
-        setCurrentPage('home');
-    }, []);
-
-    // --- RENDER SECTIONS ---
-
-    const renderHeader = () => (
-        <header className="fixed top-0 left-0 right-0 bg-black/90 backdrop-blur-md z-30 shadow-lg p-4 flex justify-between items-center h-16">
-            <div className="flex items-center space-x-8">
-                <div className="text-2xl md:text-3xl font-extrabold text-white flex items-center">
-                    <Zap className="mr-2 text-pink-400" size={28} />
-                    HIGH SCHOOL HYPE
-                </div>
-                <nav className="hidden md:flex space-x-6 text-gray-300">
-                    <NavItem title="Home" icon={Home} pageKey="home" currentPage={currentPage} setCurrentPage={setCurrentPage} />
-                    <NavItem title="My List" icon={ListIcon} pageKey="mylist" currentPage={currentPage} setCurrentPage={setCurrentPage} />
-                    <NavItem title="Latest" icon={Clock} pageKey="player" onClick={() => handleSelectEpisode(MOST_RECENT_EPISODE)} />
-                </nav>
-            </div>
-            <div className="flex items-center space-x-3 text-sm text-gray-400">
-                {isAuthReady && userId ? (
-                    <div className="hidden sm:block">
-                        <User size={16} className="inline mr-1 text-pink-400" />
-                        ID: <span className="font-mono text-xs text-indigo-300 break-all">{userId}</span>
-                    </div>
-                ) : (
-                    <span className="text-yellow-500">Loading Auth...</span>
-                )}
-            </div>
-        </header>
-    );
-
-    const renderHomePage = () => (
-        <div className="pt-16 min-h-screen bg-[#141414] text-white">
-            {/* --- Hero Section (Most Recent Episode) --- */}
-            <div 
-                className="relative w-full aspect-[16/7] md:aspect-[16/6] bg-cover bg-center transition-all duration-500 cursor-pointer group"
-                style={{ backgroundImage: `url(${MOST_RECENT_EPISODE.thumbnail})` }}
-                onClick={() => handleSelectEpisode(MOST_RECENT_EPISODE)}
-            >
-                {/* Gradient Overlay for Text Visibility */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
+                await updateDoc(episodeRef, {
+                    totalStars: totalStars,
+                    count: count,
+                    [`users.${userId}`]: newRating, // Store last rating for easy user lookup
+                });
                 
-                {/* Content */}
-                <div className="absolute bottom-0 left-0 p-6 md:p-12 max-w-lg">
-                    <p className="text-pink-400 text-sm font-bold uppercase mb-2 flex items-center">
-                        <Zap size={16} className="mr-1" /> Just Dropped
-                    </p>
-                    <h1 className="text-4xl md:text-6xl font-black text-white leading-tight mb-3 transition-colors duration-200 group-hover:text-pink-400 drop-shadow-lg">
-                        {MOST_RECENT_EPISODE.title}
-                    </h1>
-                    <p className="text-gray-300 text-base mb-6 hidden md:block">{MOST_RECENT_EPISODE.description}</p>
+                console.log(`Rating for ${episodeId} updated. New Rating: ${newRating}`);
+            };
+
+            /** Sets up the real-time listener for the hero episode's rating. */
+            const setupHeroRatingListener = (episodeId) => {
+                const episodeRef = getEpisodeDataRef(episodeId);
+                
+                // Real-time listener
+                onSnapshot(episodeRef, (doc) => {
+                    let ratingData = { totalStars: 0, count: 0, userRating: 0 };
                     
-                    <div className="flex space-x-4">
-                        <button 
-                            className="flex items-center bg-white text-black font-bold py-3 px-6 rounded-full hover:bg-gray-200 transition-all shadow-2xl"
-                            title="Play Now"
-                        >
-                            <Play fill="black" size={20} className="mr-2" /> Watch Now
-                        </button>
-                        <button 
-                            className="flex items-center bg-gray-600/70 text-white font-bold py-3 px-6 rounded-full hover:bg-gray-500/90 transition-all shadow-xl backdrop-blur-sm"
-                            onClick={(e) => { e.stopPropagation(); toggleWatchList(MOST_RECENT_EPISODE.id, watchList.includes(MOST_RECENT_EPISODE.id)); }}
-                            title={watchList.includes(MOST_RECENT_EPISODE.id) ? "Remove from My List" : "Add to My List"}
-                        >
-                            {watchList.includes(MOST_RECENT_EPISODE.id) ? <ListMinus size={20} className="mr-2 text-red-400" /> : <ListPlus size={20} className="mr-2" />}
-                            My List
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* --- Episode Rows (Netflix-Style Carousel) --- */}
-            <div className="p-4 md:p-8 space-y-10 pb-20">
-                {Object.keys(episodesBySeason).map(seasonKey => (
-                    <EpisodeRow 
-                        key={seasonKey}
-                        title={seasonKey}
-                        episodes={episodesBySeason[seasonKey]}
-                        onSelect={handleSelectEpisode}
-                        watchList={watchList}
-                        toggleWatchList={toggleWatchList}
-                    />
-                ))}
-            </div>
-        </div>
-    );
-
-    const renderPlayerPage = () => (
-        <div className="pt-24 p-4 md:p-8 min-h-screen bg-[#141414] text-white">
-            <CustomVideoPlayer episode={selectedEpisode} onMinimize={handlePlayerMinimize} />
-
-            <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Episode Details */}
-                <div className="lg:col-span-2">
-                    <h2 className="text-4xl font-bold text-pink-400 mb-2">{selectedEpisode.title}</h2>
-                    <p className="text-lg text-gray-400 mb-4">{`Season ${selectedEpisode.season} | Episode ${selectedEpisode.episode} | ${selectedEpisode.duration}`}</p>
-                    <p className="text-gray-300 text-base leading-relaxed">{selectedEpisode.description}</p>
-                    
-                    <button 
-                        className="mt-6 flex items-center bg-gray-700 text-white font-semibold py-2 px-4 rounded-full hover:bg-gray-600 transition-colors"
-                        onClick={() => toggleWatchList(selectedEpisode.id, watchList.includes(selectedEpisode.id))}
-                    >
-                        {watchList.includes(selectedEpisode.id) ? (
-                            <><ListMinus size={18} className="mr-2 text-red-400" /> Remove from My List</>
-                        ) : (
-                            <><ListPlus size={18} className="mr-2 text-white" /> Add to My List</>
-                        )}
-                    </button>
-                </div>
-
-                {/* Other Episodes */}
-                <div className="lg:col-span-1 bg-[#1c1c1c] rounded-xl p-4 shadow-xl">
-                    <h3 className="text-2xl font-bold mb-4 border-b border-gray-700 pb-2 text-pink-400">More Episodes</h3>
-                    <div className="space-y-3 max-h-96 overflow-y-auto pr-2 scrollbar-hide">
-                        {sortedEpisodes
-                            .filter(e => e.id !== selectedEpisode.id)
-                            .slice(0, 10)
-                            .map(episode => (
-                                <div 
-                                    key={episode.id} 
-                                    className="flex items-center space-x-3 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors cursor-pointer"
-                                    onClick={() => handleSelectEpisode(episode)}
-                                >
-                                    <img 
-                                        src={episode.thumbnail} 
-                                        alt={episode.title} 
-                                        className="w-16 h-9 object-cover rounded-md flex-shrink-0"
-                                    />
-                                    <div>
-                                        <p className="text-sm font-semibold truncate text-white">{episode.title}</p>
-                                        <p className="text-xs text-gray-400">{`S${episode.season} E${episode.episode}`}</p>
-                                    </div>
-                                </div>
-                            ))
+                    if (doc.exists()) {
+                        const data = doc.data();
+                        ratingData.totalStars = data.totalStars || 0;
+                        ratingData.count = data.count || 0;
+                        if (userId && data.users && data.users[userId]) {
+                            ratingData.userRating = data.users[userId];
                         }
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
+                    }
+                    renderStarRating(episodeId, ratingData);
+                }, (error) => {
+                    console.error("Error setting up rating listener:", error);
+                });
+            };
 
-    const renderMyListPage = () => (
-        <div className="pt-24 p-4 md:p-8 min-h-screen bg-[#141414] text-white">
-            <h1 className="text-4xl font-bold text-pink-400 mb-8 flex items-center">
-                <ListIcon size={32} className="mr-3" /> My List ({myListView.length})
-            </h1>
+            // 6. My List / Favorites Functions
             
-            {myListView.length === 0 ? (
-                <div className="text-center p-12 bg-gray-800 rounded-xl shadow-inner border border-gray-700">
-                    <p className="text-xl text-gray-400">Your list is empty! Add episodes from the Home page using the <ListPlus className="inline mx-1 text-white" size={20} /> icon.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-                    {myListView.map(episode => (
-                        <div 
-                            key={episode.id} 
-                            className="bg-[#1c1c1c] rounded-xl overflow-hidden shadow-lg cursor-pointer transform hover:scale-[1.02] transition duration-300 border border-gray-700"
-                            onClick={() => handleSelectEpisode(episode)}
-                        >
-                            <img 
-                                src={episode.thumbnail}
-                                alt={episode.title}
-                                className="w-full h-auto object-cover"
-                                onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/400x225/333333/ffffff?text=Video+Not+Found" }}
-                            />
-                            <div className="p-3">
-                                <p className="text-white text-sm font-semibold truncate">{episode.title}</p>
-                                <p className="text-gray-400 text-xs">{`S${episode.season} E${episode.episode}`}</p>
-                                <button 
-                                    className="mt-2 w-full flex items-center justify-center text-xs text-red-400 border border-red-400 py-1 rounded-full hover:bg-red-400 hover:text-white transition-colors font-medium"
-                                    onClick={(e) => { e.stopPropagation(); toggleWatchList(episode.id, true); }}
-                                >
-                                    <ListMinus size={14} className="mr-1" /> Remove
+            /** Toggles an episode in the current user's "My List". */
+            const toggleMyList = async (episodeId, buttonElement) => {
+                if (!userId) {
+                    showCustomModal('Authentication Required', 'Please wait until user authentication is complete before saving to My List.', 'Error');
+                    return;
+                }
+                
+                const favoritesRef = getFavoritesRef();
+                
+                // Get current state
+                const docSnap = await getDoc(favoritesRef);
+                const favorites = docSnap.exists() ? docSnap.data().episodes || [] : [];
+                const isInList = favorites.includes(episodeId);
+                
+                let message = '';
+                
+                if (isInList) {
+                    await updateDoc(favoritesRef, {
+                        episodes: arrayRemove(episodeId)
+                    });
+                    message = 'Removed from My List!';
+                } else {
+                    await setDoc(favoritesRef, {
+                        episodes: arrayUnion(episodeId)
+                    }, { merge: true });
+                    message = 'Added to My List!';
+                }
+                
+                showCustomModal('My List', message);
+
+                // Update the button state immediately
+                updateMyListButtonState(episodeId, favoritesRef, buttonElement, !isInList);
+            };
+
+            /** Updates the "My List" button appearance based on its current state. */
+            const updateMyListButtonState = async (episodeId, favoritesRef, buttonElement, forceState = null) => {
+                if (!buttonElement || !userId) return;
+
+                let isInList = false;
+                if (forceState !== null) {
+                    isInList = forceState;
+                } else {
+                    try {
+                        const docSnap = await getDoc(favoritesRef);
+                        const favorites = docSnap.exists() ? docSnap.data().episodes || [] : [];
+                        isInList = favorites.includes(episodeId);
+                    } catch (e) {
+                        console.error("Error checking favorites:", e);
+                    }
+                }
+                
+                buttonElement.innerHTML = `
+                    <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                        <path d="${isInList ? 'M5 13l4 4L19 7' : 'M5 3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2H5zm0 2h10v10H5V5zM8 7h4v2H8V7zm0 4h4v2H8v-2z'}"></path>
+                    </svg>
+                    ${isInList ? 'Remove from My List' : 'Add to My List'}
+                `;
+                // Adjust styling
+                buttonElement.classList.toggle('bg-gray-700', isInList);
+                buttonElement.classList.toggle('hover:bg-gray-600', isInList);
+                buttonElement.classList.toggle('btn-primary', !isInList);
+                buttonElement.classList.toggle('opacity-50', !userId);
+            };
+
+            // 7. Rendering Functions
+            
+            /** Renders the main Hero section */
+            const renderHeroSection = (latestEpisode, currentUserId) => {
+                const hero = document.getElementById('hero-section');
+                const youtubeEmbedUrl = `https://www.youtube.com/embed/${latestEpisode.youtubeId}?autoplay=0&rel=0&showinfo=0&iv_load_policy=3`;
+                const myListButtonId = `my-list-btn-hero`;
+
+                LATEST_EPISODE_ID = latestEpisode.id; // Set global ID for rating listener
+
+                hero.innerHTML = `
+                    <div class="relative h-screen flex items-center justify-center bg-black overflow-hidden">
+                        <!-- Hero Image/Background (Placeholder) -->
+                        <img src="${latestEpisode.imageUrl.replace('400x225', '1920x1080')}" onerror="this.src='https://placehold.co/1920x1080/000/fff?text=WESTPINE!+S${latestEpisode.season}+E${latestEpisode.id.slice(3)}'" alt="Hero Image" class="absolute inset-0 w-full h-full object-cover opacity-30 blur-sm z-0">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black z-10"></div>
+
+                        <!-- Hero Content -->
+                        <div class="relative z-20 max-w-5xl px-6 md:px-12 lg:px-20 text-white">
+                            <span class="text-xl font-bold text-westpine">${latestEpisode.duration} | S${latestEpisode.season} E${latestEpisode.id.slice(3)} | Latest Episode</span>
+                            <h1 class="text-6xl md:text-8xl font-black mt-2 mb-4 drop-shadow-lg">${latestEpisode.title}</h1>
+                            <p class="text-lg mb-6 max-w-xl">${latestEpisode.description}</p>
+                            
+                            <!-- Interaction Controls -->
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center space-y-3 sm:space-y-0 sm:space-x-4">
+                                <button onclick="document.getElementById('video-modal').classList.remove('hidden'); document.getElementById('youtube-iframe').src='${youtubeEmbedUrl}'" class="btn-primary flex items-center px-8 py-3 rounded-lg text-lg font-semibold shadow-lg hover:shadow-red-500/50">
+                                    <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                                    Watch Episode
                                 </button>
+                                <button id="${myListButtonId}" class="flex items-center px-6 py-3 rounded-lg text-lg font-semibold bg-gray-700 hover:bg-gray-600 transition duration-200 text-gray-200">
+                                    Loading List...
+                                </button>
+                                
+                                <!-- Star Rating System -->
+                                <div id="star-rating-container" class="p-3 bg-westpine-dark/70 backdrop-blur-sm rounded-lg shadow-xl">
+                                    <div class="text-center text-gray-400">Loading rating...</div>
+                                </div>
                             </div>
                         </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
+                    </div>
+                `;
 
-    let content;
-    switch (currentPage) {
-        case 'player':
-            content = renderPlayerPage();
-            break;
-        case 'mylist':
-            content = renderMyListPage();
-            break;
-        case 'home':
-        default:
-            content = renderHomePage();
-            break;
-    }
+                // After rendering, initialize the list button functionality
+                const myListButton = document.getElementById(myListButtonId);
+                if (myListButton && currentUserId) {
+                    const favoritesRef = getFavoritesRef();
+                    // Initial state update
+                    updateMyListButtonState(latestEpisode.id, favoritesRef, myListButton);
+                    // Attach click handler
+                    myListButton.onclick = () => toggleMyList(latestEpisode.id, myListButton);
+                }
 
-    return (
-        <div className="min-h-screen font-sans antialiased bg-[#141414]">
-            <script src="https://cdn.tailwindcss.com"></script>
-            {renderHeader()}
-            <main>{content}</main>
-        </div>
-    );
-}
+                setupHeroRatingListener(latestEpisode.id);
+            };
 
-// Helper component for navigation links
-const NavItem = ({ title, icon: Icon, pageKey, currentPage, setCurrentPage, onClick }) => {
-    const isActive = currentPage === pageKey;
-    const baseClasses = "flex items-center text-sm font-semibold transition-colors duration-200 cursor-pointer";
-    const activeClasses = "text-white border-b-2 border-pink-400";
-    const inactiveClasses = "text-gray-400 hover:text-white hover:border-b-2 hover:border-gray-500";
+            /** Renders the episode carousels grouped by season. */
+            const renderEpisodeCarousels = (episodes) => {
+                const container = document.getElementById('episode-carousels');
+                if (!container) return;
+                
+                // Group, sort, and render episodes
+                const seasons = episodes.reduce((acc, ep) => {
+                    (acc[ep.season] = acc[ep.season] || []).push(ep);
+                    return acc;
+                }, {});
 
-    const handleClick = () => {
-        if (onClick) {
-            onClick();
-        } else if (setCurrentPage) {
-            setCurrentPage(pageKey);
+                let html = '';
+                Object.keys(seasons).sort((a, b) => parseInt(a) - parseInt(b)).forEach(season => {
+                    const seasonEpisodes = seasons[season].sort((a, b) => parseInt(a.id.slice(3)) - parseInt(b.id.slice(3)));
+                    const seasonTitle = `Season ${season}${season == 1 ? ': The Beginning' : ': Continued'}`;
+
+                    html += `
+                        <div class="mb-8">
+                            <h2 class="text-2xl font-bold mb-4 ml-6 md:ml-12">${seasonTitle}</h2>
+                            <div class="carousel flex overflow-x-scroll space-x-4 p-4 ml-6 md:ml-12">
+                                ${seasonEpisodes.map(ep => `
+                                    <div onclick="showEpisodeDetail('${ep.id}')" class="flex-shrink-0 w-64 md:w-80 rounded-lg overflow-hidden transform hover:scale-[1.02] transition duration-300 cursor-pointer shadow-xl bg-westpine-dark group">
+                                        <img src="${ep.imageUrl}" onerror="this.src='https://placehold.co/400x225/000/fff?text=S${ep.season}+E${ep.id.slice(3)}'" alt="${ep.title}" class="w-full h-auto object-cover group-hover:opacity-80 transition duration-300">
+                                        <div class="p-3">
+                                            <p class="text-sm text-gray-400">S${ep.season} E${ep.id.slice(3)} - ${ep.duration}</p>
+                                            <h3 class="text-lg font-semibold truncate group-hover:text-westpine">${ep.title}</h3>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                container.innerHTML = html;
+            };
+
+            // 8. Main Application Logic
+            const renderApp = (episodes, currentUserId) => {
+                if (!episodes || episodes.length === 0) {
+                    document.getElementById('hero-section').innerHTML = '';
+                    document.getElementById('episode-carousels').innerHTML = '<div class="text-center py-40 text-gray-500">No episodes found. The data may be loading or the database is empty.</div>';
+                    return;
+                }
+                
+                // 1. Find the latest episode (Newest date first, fallback to episode number)
+                const latestEpisode = episodes.sort((a, b) => {
+                    if (b.date && a.date) {
+                        const dateA = new Date(a.date);
+                        const dateB = new Date(b.date);
+                        if (dateB.getTime() !== dateA.getTime()) return dateB.getTime() - dateA.getTime();
+                    }
+                    if (b.season !== a.season) return b.season - a.season;
+                    return parseInt(b.id.slice(3)) - parseInt(a.id.slice(3));
+                })[0];
+                
+                // 2. Render the Hero section with the latest episode
+                renderHeroSection(latestEpisode, currentUserId);
+
+                // 3. Render all episodes organized by season
+                renderEpisodeCarousels(episodes);
+            };
+
+
+            authReadyPromise.then((currentUserId) => {
+                // Initial fetch and set up real-time listener for the episode list
+                ensureEpisodeDataAndListen(currentUserId);
+            });
+
+            // 9. Global functions for Modals
+            
+            // Expose showEpisodeDetail globally for use in HTML onclick
+            window.showEpisodeDetail = (episodeId) => {
+                const ep = EPISODE_MAP[episodeId];
+                if (!ep) return;
+                
+                const modal = document.getElementById('detail-modal');
+                const title = document.getElementById('detail-title');
+                const desc = document.getElementById('detail-description');
+                const info = document.getElementById('detail-info');
+                const watchBtn = document.getElementById('detail-watch-btn');
+                const myListBtnDetail = document.getElementById('detail-my-list-btn');
+
+                const youtubeEmbedUrl = `https://www.youtube.com/embed/${ep.youtubeId}?autoplay=0&rel=0&showinfo=0&iv_load_policy=3`;
+                
+                title.textContent = ep.title;
+                desc.textContent = ep.description;
+                info.innerHTML = `<span class="text-westpine font-bold">S${ep.season} E${ep.id.slice(3)}</span> | ${ep.duration} | Released: ${new Date(ep.date).toLocaleDateString()}`;
+                
+                watchBtn.onclick = () => {
+                    document.getElementById('video-modal').classList.remove('hidden');
+                    document.getElementById('youtube-iframe').src = youtubeEmbedUrl;
+                    modal.classList.add('hidden');
+                };
+
+                // My List Button Setup for Detail Modal
+                myListBtnDetail.onclick = () => toggleMyList(ep.id, myListBtnDetail);
+                
+                if (userId) {
+                    const favoritesRef = getFavoritesRef();
+                    updateMyListButtonState(ep.id, favoritesRef, myListBtnDetail);
+                }
+
+                modal.classList.remove('hidden');
+            };
+
+            // Expose global helpers
+            window.handleRating = handleRating;
+            window.toggleMyList = toggleMyList;
+            window.showCustomModal = showCustomModal; // For future use
+        } else {
+            document.getElementById('main-content').innerHTML = '<div class="text-center py-20 text-red-500">Configuration Error: Firebase config is missing. Cannot load app.</div>';
         }
-    };
+    </script>
 
-    return (
-        <div 
-            className={`${baseClasses} ${isActive ? activeClasses : inactiveClasses}`}
-            onClick={handleClick}
-        >
-            <Icon size={18} className="mr-1 md:hidden" />
-            <span className="py-1">{title}</span>
+    <!-- Navigation Bar -->
+    <header class="fixed top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm shadow-xl px-6 md:px-12 py-4">
+        <div class="flex justify-between items-center max-w-7xl mx-auto">
+            <div class="flex items-center space-x-6">
+                <a href="#" class="text-3xl font-extrabold tracking-tight text-westpine">Westpine!</a>
+                <nav class="hidden sm:flex space-x-6 text-sm font-semibold">
+                    <a href="#" class="hover:text-westpine transition duration-200">Home</a>
+                    <a href="#episodes" class="hover:text-westpine transition duration-200">Episodes</a>
+                    <a href="#" class="hover:text-westpine transition duration-200">About Us</a>
+                </nav>
+            </div>
+            <div id="user-id-display" class="text-xs text-gray-500 truncate max-w-[100px] md:max-w-xs">Loading Auth...</div>
         </div>
-    );
-};
+    </header>
 
-// Helper component for the horizontal row of episodes
-const EpisodeRow = ({ title, episodes, onSelect, watchList, toggleWatchList }) => (
-    <div>
-        <h2 className="text-2xl font-bold text-white mb-4 drop-shadow-md">{title}</h2>
-        <div className="flex space-x-5 overflow-x-auto p-2 scrollbar-hide">
-            {episodes.map(episode => (
-                <EpisodeCard 
-                    key={episode.id}
-                    episode={episode}
-                    onSelect={onSelect}
-                    watchList={watchList}
-                    toggleWatchList={toggleWatchList}
-                />
-            ))}
+    <!-- Main Content Wrapper -->
+    <div id="main-content">
+        <!-- Hero Section (Latest Episode) -->
+        <section id="hero-section" class="pt-20"></section>
+
+        <!-- Episode Carousels -->
+        <section id="episodes" class="py-12 md:py-16">
+            <div id="episode-carousels">
+                <!-- Content will be injected here by JavaScript -->
+                <div class="text-center py-20 text-gray-500">Loading episodes...</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Video Player Modal (for watching the episode) -->
+    <div id="video-modal" class="fixed inset-0 bg-black/95 z-50 hidden flex items-center justify-center p-4" onclick="this.classList.add('hidden'); document.getElementById('youtube-iframe').src=''">
+        <div class="relative w-full max-w-4xl h-auto aspect-video rounded-xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()">
+            <iframe id="youtube-iframe" width="100%" height="100%" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen class="w-full h-full"></iframe>
+            <button class="absolute top-4 right-4 text-white hover:text-westpine transition" onclick="document.getElementById('video-modal').classList.add('hidden'); document.getElementById('youtube-iframe').src=''">
+                <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+            </button>
         </div>
     </div>
-);
 
-// Inject custom style for scrollbar hiding (used in episode rows and more episodes list)
-const styleTag = document.createElement('style');
-styleTag.innerHTML = `
-    .scrollbar-hide::-webkit-scrollbar { display: none; }
-    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-    .aspect-video { aspect-ratio: 16 / 9; }
-`;
-document.head.appendChild(styleTag);
-
-
-export default App;
+    <!-- Episode Detail Modal (like the Stranger Things detailed view) -->
+    <div id="detail-modal" class="fixed inset-0 bg-black/95 z-40 hidden flex items-center justify-center p-4" onclick="this.classList.add('hidden')">
+        <div class="relative w-full max-w-4xl bg-westpine-dark rounded-xl shadow-2xl overflow-hidden transform transition duration-300" onclick="event.stopPropagation()">
+            <button class="absolute top-4 right-4 text-white z-10 p-2 rounded-full bg-black/50 hover:bg-westpine transition" onclick="document.getElementById('detail-modal').classList.add('hidden')">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+            </button>
+            
+            <div class="p-8">
+                <h2 id="detail-title" class="text-4xl font-bold mb-2">Episode Title</h2>
+                <p id="detail-info" class="text-lg text-gray-400 mb-4"></p>
+                <p id="detail-description" class="text-gray-200 mb-6"></p>
+                
+                <div class="flex space-x-4">
+                    <button id="detail-watch-btn" class="btn-primary flex items-center px-6 py-3 rounded-lg text-lg font-semibold shadow-lg hover:shadow-red-500/50">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                        Watch Now
+                    </button>
+                    <button id="detail-my-list-btn" class="flex items-center px-6 py-3 rounded-lg text-lg font-semibold bg-gray-700 hover:bg-gray-600 transition duration-200 text-gray-200">
+                        Add to My List
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Custom Alert/Notification Modal -->
+    <div id="custom-alert-modal" class="fixed inset-0 bg-black/75 z-[99] hidden flex items-center justify-center p-4" onclick="this.classList.add('hidden')">
+        <div class="w-full max-w-sm bg-westpine-dark rounded-xl shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+            <div id="custom-alert-header" class="p-4 rounded-t-xl text-white bg-westpine">
+                <h3 id="custom-alert-title" class="font-bold text-xl">Notification</h3>
+            </div>
+            <div class="p-4">
+                <p id="custom-alert-message" class="text-gray-300"></p>
+                <button onclick="document.getElementById('custom-alert-modal').classList.add('hidden')" class="mt-4 w-full btn-primary px-4 py-2 rounded-lg font-semibold">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
